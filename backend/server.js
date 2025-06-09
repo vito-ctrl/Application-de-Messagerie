@@ -7,9 +7,9 @@ const PORT = process.env.PORT || 5000;
 
 connectDB()
   .then(() => {
-    app.listen(PORT, () => {
-      console.log(`Serveur lancé sur http://localhost:${PORT}`);
-    });
+    app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Serveur lancé sur http://192.168.1.5:${PORT}`);
+});
   })
   .catch((err) => {
     console.error('Erreur de connexion à MongoDB:', err.message);

@@ -1,7 +1,7 @@
 const Ticket = require('../models/Ticket.js');
 
 const createTicket = async (data) => {
-  return await Ticket.create(data);
+  return await Ticket.create();
 };
 
 const getTickets = async () => {
