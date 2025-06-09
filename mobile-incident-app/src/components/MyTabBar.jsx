@@ -15,6 +15,12 @@ export default function SimpleTabBar({ navigation }) { // Add navigation prop
       >
         <Text style={styles.tabText}>Tickets</Text>
       </TouchableOpacity>
+      <TouchableOpacity 
+        style={styles.tab} 
+        onPress={() => handleTabPress('Login')}
+      >
+        <Text style={styles.tabText}>Login</Text>
+      </TouchableOpacity>
       
       <TouchableOpacity 
         style={styles.tab} 

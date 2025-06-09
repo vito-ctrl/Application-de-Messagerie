@@ -14,11 +14,21 @@ export default function TicketForm({ navigation }) {
     setForm({ ...form, [field]: value });
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async() => {
     if (!form.name || !form.email || !form.subject || !form.message) {
       Alert.alert('Validation Error', 'Please fill in all fields.');
       return;
     }
+
+    const res = await fetch('http://localhost:5000/api/tickets',{
+        method: 'POST',
+        headers: {
+            'authorization': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY4MzBhMzNlYTc3MDE2MGEzZjlkYzZhZCIsInJvbGUiOiJ1c2VyIiwiaWF0IjoxNzQ4MDE5Mjg4LCJleHAiOjE3NDg2MjQwODh9.qCNhnGm5vTMUS_fCOhR9RCVZlizm7Huema7-Kfth7u4',
+            'Content-Type': 'application/json'
+        }
+    })
+    const result = await res.json()
+    console.log(result)
 
     // Simulate ticket submission
     Alert.alert('Success', 'Ticket submitted successfully!', [
@@ -28,6 +38,9 @@ export default function TicketForm({ navigation }) {
       }
     ]);
   };
+
+
+  console.log(form)
 
   return (
     <View style={styles.container}>
