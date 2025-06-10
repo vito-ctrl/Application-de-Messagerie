@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 // import AsyncStorage from '@react-native-async-storage/async-storage';
 
+// Add navigation prop here
 export default function Register({ navigation }) {
   const [signup, setSignup] = useState({});
   const [errors, setErrors] = useState({});
@@ -24,7 +25,23 @@ export default function Register({ navigation }) {
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         return !emailRegex.test(value) ? 'Please enter a valid email address' : '';
       case 'password':
-        return value.length < 6 ? 'Password must be at least 6 characters long' : '';
+        // More comprehensive password validation to match server requirements
+        if (value.length < 8) {
+          return 'Password must be at least 8 characters long';
+        }
+        if (!/(?=.*[a-z])/.test(value)) {
+          return 'Password must contain at least one lowercase letter';
+        }
+        if (!/(?=.*[A-Z])/.test(value)) {
+          return 'Password must contain at least one uppercase letter';
+        }
+        if (!/(?=.*\d)/.test(value)) {
+          return 'Password must contain at least one number';
+        }
+        if (!/(?=.*[@$!%*?&])/.test(value)) {
+          return 'Password must contain at least one special character (@$!%*?&)';
+        }
+        return '';
       case 'Phone':
         const phoneRegex = /^[0-9]{10,}$/;
         return !phoneRegex.test(value.replace(/\s/g, '')) ? 'Please enter a valid phone number (at least 10 digits)' : '';
@@ -74,37 +91,76 @@ export default function Register({ navigation }) {
     }
 
     try {
-      const res = await fetch('http://192.168.20.235:5000/api/auth/register', {
+      console.log('Attempting to register with data:', signup);
+      
+      const res = await fetch('http://192.168.1.6:3000/api/auth/signup', {
         method: 'POST',
         headers: {
-          "Content-Type": "application/json",
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
         },
         body: JSON.stringify(signup)
       });
+
+      console.log('Response status:', res.status);
+      console.log('Response headers:', res.headers);
+      
+      // Check if response is actually JSON
+      const contentType = res.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        const textResponse = await res.text();
+        console.log('Non-JSON response received:', textResponse);
+        throw new Error('Server returned non-JSON response. Check if the server is running and the endpoint exists.');
+      }
+
       const data = await res.json();
+      console.log('Response data:', data);
       
       if (res.ok) {
         // await AsyncStorage.setItem("SighnToken", data.token);
-        // For now, we'll just log the token. Install AsyncStorage to persist it.
-        // console.log('Token received:', data.token);
-        console.log('data received !');
-        navigation.navigate('Login')
+        console.log('Registration successful');
+        Alert.alert('Success', 'Account created successfully!', [
+          { text: 'OK', onPress: () => navigation.navigate('Login') }
+        ]);
       } else {
         // Handle error response from server
-        setErrors(prev => ({
-          ...prev,
-          serverError: data.message || "Registration failed"
-        }));
-      }
-    //   console.log(data);
-      if (!res.ok) {
-        console.error('request error');
+        console.log('Server validation errors:', data);
+        
+        if (data.errors && Array.isArray(data.errors)) {
+          // Handle server validation errors
+          const serverErrors = {};
+          data.errors.forEach(error => {
+            if (error.path && error.msg) {
+              serverErrors[error.path] = error.msg;
+            }
+          });
+          
+          setErrors(prev => ({
+            ...prev,
+            ...serverErrors,
+            serverError: data.message || `Registration failed (${res.status})`
+          }));
+        } else {
+          setErrors(prev => ({
+            ...prev,
+            serverError: data.message || `Registration failed (${res.status})`
+          }));
+        }
       }
     } catch (error) {
-      console.log(error);
+      console.log('Full error object:', error);
+      
+      let errorMessage = "Network error. Please try again.";
+      
+      if (error.message.includes('Network request failed')) {
+        errorMessage = "Cannot connect to server. Please check your connection and ensure the server is running.";
+      } else if (error.message.includes('JSON Parse error') || error.message.includes('non-JSON response')) {
+        errorMessage = "Server error. The server may be down or the endpoint may not exist.";
+      }
+      
       setErrors(prev => ({
         ...prev,
-        serverError: "Network error. Please try again."
+        serverError: errorMessage
       }));
     }
   };
@@ -133,7 +189,7 @@ export default function Register({ navigation }) {
               value={signup.name || ''}
               onChangeText={(value) => handleInput('name', value)}
             />
-            {errors.name && <Text style={styles.errorText}>{errors.name}</Text>}
+            {errors.name ? <Text style={styles.errorText}>{errors.name}</Text> : null}
           </View>
 
           {/* Email Input */}
@@ -150,10 +206,10 @@ export default function Register({ navigation }) {
               keyboardType="email-address"
               autoCapitalize="none"
             />
-            {errors.email && <Text style={styles.errorText}>{errors.email}</Text>}
+            {errors.email ? <Text style={styles.errorText}>{errors.email}</Text> : null}
           </View>
 
-          {/* Phone Input - Fixed */}
+          {/* Phone Input */}
           <View style={styles.inputWrapper}>
             <TextInput
               style={[
@@ -166,7 +222,7 @@ export default function Register({ navigation }) {
               onChangeText={(value) => handleInput('Phone', value)}
               keyboardType="phone-pad"
             />
-            {errors.Phone && <Text style={styles.errorText}>{errors.Phone}</Text>}
+            {errors.Phone ? <Text style={styles.errorText}>{errors.Phone}</Text> : null}
           </View>
 
           {/* Password Input */}
@@ -182,10 +238,10 @@ export default function Register({ navigation }) {
               onChangeText={(value) => handleInput('password', value)}
               secureTextEntry
             />
-            {errors.password && <Text style={styles.errorText}>{errors.password}</Text>}
+            {errors.password ? <Text style={styles.errorText}>{errors.password}</Text> : null}
           </View>
 
-          {/* Confirm Password - Fixed */}
+          {/* Confirm Password */}
           <View style={styles.inputWrapper}>
             <TextInput
               style={[
@@ -198,15 +254,15 @@ export default function Register({ navigation }) {
               onChangeText={(value) => handleInput('comfiPassword', value)}
               secureTextEntry
             />
-            {errors.comfiPassword && <Text style={styles.errorText}>{errors.comfiPassword}</Text>}
+            {errors.comfiPassword ? <Text style={styles.errorText}>{errors.comfiPassword}</Text> : null}
           </View>
 
           {/* Server Error */}
-          {errors.serverError && (
+          {errors.serverError ? (
             <Text style={[styles.errorText, styles.serverError]}>
               {errors.serverError}
             </Text>
-          )}
+          ) : null}
 
           {/* Sign Up Button */}
           <TouchableOpacity style={styles.button} onPress={handleSubmit}>
