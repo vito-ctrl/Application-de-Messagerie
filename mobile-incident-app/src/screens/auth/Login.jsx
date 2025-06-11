@@ -67,7 +67,7 @@ export default function Login({ navigation }) {
     }
 
     try {
-      const res = await fetch('http://192.168.20.235:5000/api/auth/signin', {
+      const res = await fetch('http://192.168.30.136:3000/api/auth/signin', {
         method: 'POST',
         headers: {
           "Content-Type": "application/json",
@@ -77,11 +77,11 @@ export default function Login({ navigation }) {
       const data = await res.json();
       
       if (res.ok) {
-        // await AsyncStorage.setItem("LoginToken", data.token);
-        // For now, we'll just log the token. Install AsyncStorage to persist it.
-        // Navigate to home or dashboard screen
-        console.log('Login received !');
-        // navigation.navigate('Home'); 
+        // await AsyncStorage.setItem("SighnToken", data.token);
+        console.log('login successful');
+        Alert.alert('Success', 'user loged in successfully!', [
+          { text: 'OK', onPress: () => navigation.navigate('SocketTest') }
+        ]);
       } else {
         // Handle error response from server
         setErrors(prev => ({
