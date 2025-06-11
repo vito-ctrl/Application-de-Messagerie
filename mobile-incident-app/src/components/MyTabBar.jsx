@@ -1,5 +1,3 @@
-// MyTabBar.jsx
-import React from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
 
 export default function SimpleTabBar({ navigation }) { // Add navigation prop
@@ -20,13 +18,6 @@ export default function SimpleTabBar({ navigation }) { // Add navigation prop
         onPress={() => handleTabPress('Login')}
       >
         <Text style={styles.tabText}>Login</Text>
-      </TouchableOpacity>
-      
-      <TouchableOpacity 
-        style={styles.tab} 
-        onPress={() => handleTabPress('TicketForm')}
-      >
-        <Text style={styles.tabText}>New Ticket</Text>
       </TouchableOpacity>
     </View>
   );

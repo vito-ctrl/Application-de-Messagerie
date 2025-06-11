@@ -7,7 +7,6 @@ export default function Page() {
   return (
     <View style={styles.container}>
       <MyStack />
-      
     </View>
   );
 }
