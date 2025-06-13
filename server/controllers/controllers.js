@@ -1,8 +1,6 @@
 const User = require('../models/auth')
 const jwt = require('jsonwebtoken');
-const bcrybt = require('bcryptjs')
-// const { query } = require ('express-validator')
-// const { registerValidator } = require ('../validator/userValidator'); 
+const bcrypt = require('bcryptjs') // Fixed typo: bcrybt -> bcrypt
 const { validationResult } = require('express-validator');
 
 exports.signup = async(req, res) => {
@@ -18,24 +16,34 @@ exports.signup = async(req, res) => {
         const user = await User.findOne({email: req.body.email});
         if(user){
             return res.status(400).json({
-                status: 'fails',
-                massage: 'user already exists'
+                status: 'fail', // Fixed typo: fails -> fail
+                message: 'user already exists' // Fixed typo: massage -> message
             });
         }
-        const hashedPassword = await bcrybt.hash(req.body.password, 12);
+        
+        const hashedPassword = await bcrypt.hash(req.body.password, 12);
         const newUser = await User.create({
             ...req.body,
             password: hashedPassword,
         });
+        
         const token = jwt.sign({_id: newUser._id}, 'scretkey123', {
             expiresIn: '10d',
         });
+        
         res.status(201).json({
             status: 'success',
-            message: 'user registerd successfully',
-            token
+            message: 'user registered successfully', // Fixed typo: registerd -> registered
+            token,
+            user: {
+                _id: newUser._id,
+                name: newUser.name,
+                email: newUser.email,
+                role: newUser.role
+            }
         })
     } catch(error){
+        console.error('Signup error:', error); // Added logging
         res.status(500).json({
             status: 'error',
             message: 'registration failed',
@@ -47,6 +55,14 @@ exports.signup = async(req, res) => {
 exports.signin = async(req, res) => {
     try{
         const {email, password} = req.body;
+        
+        if (!email || !password) {
+            return res.status(400).json({
+                status: 'fail',
+                message: 'Email and password are required'
+            });
+        }
+        
         const user = await User.findOne({email});
         
         if(!user) {
@@ -56,7 +72,7 @@ exports.signin = async(req, res) => {
             });
         }
 
-        const isPasswordValid = await bcrybt.compare(password, user.password);
+        const isPasswordValid = await bcrypt.compare(password, user.password);
 
         if(!isPasswordValid){
             return res.status(401).json({
@@ -68,10 +84,11 @@ exports.signin = async(req, res) => {
         const token = jwt.sign({_id: user._id}, 'scretkey123', {
             expiresIn: '10d',
         });
+        
         res.status(200).json({
             status: 'success',
             token,
-            message: 'loged in successfully',
+            message: 'logged in successfully', // Fixed typo: loged -> logged
             user: {
                 _id: user._id,
                 name: user.name,
@@ -80,6 +97,7 @@ exports.signin = async(req, res) => {
             }
         })
     } catch (error) {
+        console.error('Signin error:', error); // Added logging
         res.status(500).json({
             status: 'error',
             message: 'Login failed',

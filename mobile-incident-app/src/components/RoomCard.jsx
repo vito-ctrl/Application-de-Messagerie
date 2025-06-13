@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
-import SimpleTabBar from '../components/MyTabBar'
+import SimpleTabBar from './MyTabBar'
 
 const TicketCard = ({ navigation }) => {
   return (

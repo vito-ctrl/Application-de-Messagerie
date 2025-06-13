@@ -9,67 +9,45 @@ import {
   SafeAreaView,
   StatusBar,
   TextInput,
-  Modal,
   KeyboardAvoidingView,
   Platform,
+  Modal,
+  FlatList,
+  Dimensions,
 } from 'react-native';
 import io from 'socket.io-client';
-import { App_IP } from '@env'
 
-console.log(App_IP)
+const { width, height } = Dimensions.get('window');
+const SERVER_URL = `http://192.168.20.85:3000`; 
 
-const testUsers = [
-  { email: 'hamza@gmail.com', password: 'Hamza123@' },
-  { email: 'bensalemhossna@gmail.com', password: 'Hossna123@' },
-  { name: 'Charlie Brown', email: 'charlie@test.com', password: 'password123' },
-  { name: 'Diana Prince', email: 'diana@test.com', password: 'password123' },
-  { name: 'Eve Wilson', email: 'eve@test.com', password: 'password123' },
-];
-
-const SocketIOTest = () => {
-  const [users, setUsers] = useState([]);
-  const [logs, setLogs] = useState([]);
+export default function SocketIOTest  () {
   const [messages, setMessages] = useState([]);
-  const [isRunning, setIsRunning] = useState(false);
-  const [selectedUserId, setSelectedUserId] = useState(null);
-  const [showUserModal, setShowUserModal] = useState(false);
-  const [showMessagingModal, setShowMessagingModal] = useState(false);
-  const [newUserCount, setNewUserCount] = useState('2');
-  const [currentRoom, setCurrentRoom] = useState('general');
   const [messageInput, setMessageInput] = useState('');
-  const [selectedSender, setSelectedSender] = useState(null);
-  const [selectedReceiver, setSelectedReceiver] = useState(null);
   const [privateMessageInput, setPrivateMessageInput] = useState('');
-  const [messagingMode, setMessagingMode] = useState('room'); // 'room' or 'private'
-  const scrollViewRef = useRef(null);
+  const [messagingMode, setMessagingMode] = useState('room');
+  const [currentRoom, setCurrentRoom] = useState('general');
+  const [connectedUsers, setConnectedUsers] = useState([]);
+  const [selectedReceiver, setSelectedReceiver] = useState(null);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [connectionError, setConnectionError] = useState(null);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [showUserModal, setShowUserModal] = useState(false);
+  const [showRoomModal, setShowRoomModal] = useState(false);
+  const [newRoomName, setNewRoomName] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
+  const [typingUsers, setTypingUsers] = useState([]);
+  
   const messageScrollViewRef = useRef(null);
-  const userSocketsRef = useRef({});
-
-  // Add log entry with user context
-  const addLog = (message, type = 'info', userId = null) => {
-    const timestamp = new Date().toLocaleTimeString();
-    const logEntry = {
-      id: Date.now() + Math.random(),
-      message,
-      type,
-      timestamp,
-      userId
-    };
-    
-    setLogs(prevLogs => [...prevLogs, logEntry]);
-    
-    // Auto-scroll to bottom
-    setTimeout(() => {
-      scrollViewRef.current?.scrollToEnd({ animated: true });
-    }, 100);
-  };
+  const socketRef = useRef(null);
+  const typingTimeoutRef = useRef(null);
 
   // Add message to chat
   const addMessage = (messageData) => {
     const messageEntry = {
       id: Date.now() + Math.random(),
       ...messageData,
-      timestamp: new Date().toLocaleTimeString(),
+      timestamp: messageData.timestamp || new Date().toLocaleTimeString(),
     };
     
     setMessages(prevMessages => [...prevMessages, messageEntry]);
@@ -80,870 +58,764 @@ const SocketIOTest = () => {
     }, 100);
   };
 
-  // Clear logs
-  const clearLogs = () => {
-    setLogs([]);
-  };
-
   // Clear messages
   const clearMessages = () => {
     setMessages([]);
   };
 
-  // Create or login user and get token
-  const authenticateUser = async (userInfo) => {
+  // Create a test user function (for demo purposes)
+  const createTestUser = async () => {
     try {
-      addLog(`🔐 [${userInfo.name}] Logging in...`, 'info');
+      console.log('🔄 Creating/authenticating test user...');
       
-      // Try login first
-      let response = await fetch(`${SERVER_URL}/api/auth/signin`, {
+      const testUser = {
+        name: 'hamza',
+        email: 'hamza@gmail.com',
+        password: 'Hamza123@'
+      };
+
+      const response = await fetch(`${SERVER_URL}/api/auth/signup`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          email: userInfo.email,
-          password: userInfo.password
-        }),
+        body: JSON.stringify(testUser),
       });
-      
-      let data = await response.json();
-      
-      // If login fails, try to create user
-      if (data.status !== 'success') {
-        addLog(`🔄 [${userInfo.name}] Creating new user...`, 'info');
-        
-        response = await fetch(`${SERVER_URL}/api/auth/signup`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(userInfo),
-        });
-        
-        data = await response.json();
-      }
+
+      const data = await response.json();
+      console.log('Signup response:', data);
       
       if (data.status === 'success') {
-        addLog(`✅ [${userInfo.name}] Authentication successful!`, 'success');
-        return data.token;
+        console.log('✅ Test user created successfully');
+        return { token: data.token, user: data.user };
+      } else if (data.message && data.message.includes('already exists')) {
+        console.log('🔄 User exists, trying to login...');
+        // User exists, try to login
+        return await authenticateUser(testUser.email, testUser.password);
       } else {
-        throw new Error(data.message);
+        throw new Error(data.message || 'Failed to create test user');
       }
     } catch (error) {
-      addLog(`❌ [${userInfo.name}] Authentication failed: ${error.message}`, 'error');
-      return null;
+      console.log('🔄 Creating test user failed, trying to login:', error.message);
+      // If creation fails, try to login with existing credentials
+      return await authenticateUser('test@example.com', 'password123');
     }
   };
 
-  // Connect user to Socket.IO
-  const connectUser = (userInfo, token) => {
-    const userId = userInfo.email;
-    addLog(`🔌 [${userInfo.name}] Connecting to Socket.IO...`, 'info', userId);
-    
-    const socket = io(SERVER_URL, {
-      auth: {
-        token: token
+  // Authentication function
+  const authenticateUser = async (email, password) => {
+    try {
+      console.log('🔐 Authenticating user:', email);
+      
+      const response = await fetch(`${SERVER_URL}/api/auth/signin`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email, password }),
+      });
+      
+      const data = await response.json();
+      console.log('Signin response:', data);
+      
+      if (data.status === 'success') {
+        console.log('✅ Authentication successful');
+        return { token: data.token, user: data.user };
+      } else {
+        throw new Error(data.message || 'Authentication failed');
       }
-    });
+    } catch (error) {
+      console.error('❌ Authentication error:', error.message);
+      throw new Error(`Authentication failed: ${error.message}`);
+    }
+  };
 
-    userSocketsRef.current[userId] = socket;
+  // Connect to Socket.IO
+  const connectToSocket = async () => {
+    if (isConnecting) {
+      console.log('⏳ Connection already in progress...');
+      return;
+    }
 
-    // Connection events
-    socket.on('connect', () => {
-      addLog(`✅ [${userInfo.name}] Connected! Socket ID: ${socket.id}`, 'success', userId);
+    try {
+      setIsConnecting(true);
+      setConnectionError(null);
+      console.log('🔄 Starting socket connection...');
       
-      setUsers(prevUsers => 
-        prevUsers.map(user => 
-          user.id === userId 
-            ? { ...user, isConnected: true, socketId: socket.id }
-            : user
-        )
-      );
+      // Disconnect existing socket
+      if (socketRef.current) {
+        console.log('🔄 Disconnecting existing socket...');
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+      
+      // Create or authenticate test user
+      let authData;
+      try {
+        authData = await createTestUser();
+      } catch (error) {
+        throw new Error(`Failed to authenticate: ${error.message}`);
+      }
 
-      // Auto-join the general room
-      socket.emit('joinRoom', {
-        roomId: currentRoom,
-        metadata: { name: 'General Chat', description: 'Main chat room' }
+      const { token, user } = authData;
+      
+      if (!token || !user) {
+        throw new Error('Invalid authentication data received');
+      }
+      
+      console.log('🔐 Connecting with token:', token ? 'Present' : 'Missing');
+      console.log('👤 User:', user.name, user.email);
+      
+      const socket = io(SERVER_URL, {
+        auth: { token: token },
+        transports: ['websocket', 'polling'],
+        timeout: 10000,
+        forceNew: true,
+        reconnection: true,
+        reconnectionAttempts: 5,
+        reconnectionDelay: 1000
       });
-    });
 
-    socket.on('connect_error', (error) => {
-      addLog(`❌ [${userInfo.name}] Connection failed: ${error.message}`, 'error', userId);
-      
-      setUsers(prevUsers => 
-        prevUsers.map(user => 
-          user.id === userId 
-            ? { ...user, isConnected: false }
-            : user
-        )
-      );
-    });
+      socketRef.current = socket;
 
-    socket.on('disconnect', (reason) => {
-      addLog(`🔌 [${userInfo.name}] Disconnected: ${reason}`, 'warning', userId);
-      
-      setUsers(prevUsers => 
-        prevUsers.map(user => 
-          user.id === userId 
-            ? { ...user, isConnected: false, socketId: null }
-            : user
-        )
-      );
-    });
+      // Set current user info
+      setCurrentUser({
+        _id: user._id,
+        id: user._id,
+        name: user.name,
+        email: user.email
+      });
 
-    // Message events
-    socket.on('privateMessage', (data) => {
-      addLog(`📧 [${userInfo.name}] Private message from ${data.sender.name}: ${data.message}`, 'message', userId);
+      // Connection events
+      socket.on('connect', () => {
+        console.log('✅ Connected to server with socket ID:', socket.id);
+        setIsConnected(true);
+        setConnectionError(null);
+        setIsConnecting(false);
+        
+        addMessage({
+          type: 'system',
+          message: '🟢 Connected to server',
+          timestamp: new Date().toLocaleTimeString()
+        });
+        
+        // Auto-join the general room
+        console.log('🏠 Auto-joining room:', currentRoom);
+        socket.emit('joinRoom', {
+          roomId: currentRoom,
+          metadata: { name: 'General Chat', description: 'Main chat room' }
+        });
+      });
+
+      socket.on('disconnect', (reason) => {
+        console.log('❌ Disconnected from server:', reason);
+        setIsConnected(false);
+        setConnectionError(`Disconnected: ${reason}`);
+        setIsConnecting(false);
+        
+        addMessage({
+          type: 'system',
+          message: `🔴 Disconnected: ${reason}`,
+          timestamp: new Date().toLocaleTimeString()
+        });
+      });
+
+      socket.on('connect_error', (error) => {
+        console.error('❌ Connection error:', error.message);
+        setConnectionError(`Connection error: ${error.message}`);
+        setIsConnected(false);
+        setIsConnecting(false);
+        
+        addMessage({
+          type: 'system',
+          message: `❌ Connection error: ${error.message}`,
+          timestamp: new Date().toLocaleTimeString()
+        });
+      });
+
+      // Message events
+      socket.on('privateMessage', (data) => {
+        console.log('📧 Private message received:', data);
+        addMessage({
+          type: 'private',
+          sender: data.sender,
+          receiver: user,
+          message: data.message,
+          direction: 'received',
+          timestamp: data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString()
+        });
+      });
+
+      socket.on('roomMessage', (data) => {
+        console.log('🏠 Room message received:', data);
+        addMessage({
+          type: 'room',
+          sender: data.sender,
+          roomId: data.roomId,
+          message: data.message,
+          direction: data.sender.email === user.email ? 'sent' : 'received',
+          timestamp: data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString()
+        });
+      });
+
+      // Message delivery confirmations
+      socket.on('messageDelivered', (data) => {
+        console.log('✅ Message delivered:', data);
+      });
+
+      socket.on('messageError', (data) => {
+        console.error('❌ Message error:', data);
+        Alert.alert('Message Error', data.error);
+        addMessage({
+          type: 'system',
+          message: `❌ Message error: ${data.error}`,
+          timestamp: new Date().toLocaleTimeString()
+        });
+      });
+
+      // Room events
+      socket.on('roomJoined', (data) => {
+        console.log(`🏠 Joined room: ${data.roomId}`, data);
+        addMessage({
+          type: 'system',
+          message: `🏠 Joined room: ${data.roomId} (${data.userCount} users)`,
+          timestamp: new Date().toLocaleTimeString()
+        });
+      });
+
+      socket.on('userJoinedRoom', (data) => {
+        console.log('👋 User joined room:', data);
+        addMessage({
+          type: 'system',
+          message: `👋 ${data.user.name} joined the room`,
+          timestamp: new Date().toLocaleTimeString()
+        });
+      });
+
+      socket.on('userLeftRoom', (data) => {
+        console.log('👋 User left room:', data);
+        addMessage({
+          type: 'system',
+          message: `👋 ${data.user.name} left the room`,
+          timestamp: new Date().toLocaleTimeString()
+        });
+      });
+
+      socket.on('connectedUsers', (data) => {
+        console.log('👥 Connected users received:', data);
+        setConnectedUsers(data.users || []);
+      });
+
+      socket.on('userOnline', (data) => {
+        console.log('🟢 User online:', data);
+        setConnectedUsers(prev => {
+          const exists = prev.some(existingUser => existingUser.userId === data.userId);
+          if (exists) return prev;
+          
+          return [...prev, {
+            userId: data.userId,
+            id: data.userId,
+            name: data.user.name,
+            email: data.user.email,
+            status: 'online'
+          }];
+        });
+        
+        addMessage({
+          type: 'system',
+          message: `🟢 ${data.user.name} came online`,
+          timestamp: new Date().toLocaleTimeString()
+        });
+      });
+
+      socket.on('userOffline', (data) => {
+        console.log('🔴 User offline:', data);
+        setConnectedUsers(prev => prev.filter(user => user.userId !== data.userId));
+        
+        addMessage({
+          type: 'system',
+          message: `🔴 ${data.user.name} went offline`,
+          timestamp: new Date().toLocaleTimeString()
+        });
+      });
+
+      // Typing indicators
+      socket.on('userTyping', (data) => {
+        const { userId, user: typingUser, isTyping } = data;
+        
+        setTypingUsers(prev => {
+          if (isTyping) {
+            const exists = prev.some(u => u.userId === userId);
+            if (!exists) {
+              return [...prev, { userId, name: typingUser.name }];
+            }
+            return prev;
+          } else {
+            return prev.filter(u => u.userId !== userId);
+          }
+        });
+
+        // Auto-remove typing indicator after 3 seconds
+        setTimeout(() => {
+          setTypingUsers(prev => prev.filter(u => u.userId !== userId));
+        }, 3000);
+      });
+
+      socket.on('error', (error) => {
+        console.error('🚨 Socket error:', error);
+        addMessage({
+          type: 'system',
+          message: `🚨 Socket error: ${error.message || error}`,
+          timestamp: new Date().toLocaleTimeString()
+        });
+      });
+
+    } catch (error) {
+      console.error('❌ Socket connection failed:', error);
+      setConnectionError(error.message);
+      setIsConnecting(false);
+      Alert.alert('Connection Error', error.message);
       
-      // Add to message history
       addMessage({
-        type: 'private',
-        sender: data.sender,
-        receiver: userInfo,
-        message: data.message,
-        direction: 'received'
+        type: 'system',
+        message: `❌ Connection failed: ${error.message}`,
+        timestamp: new Date().toLocaleTimeString()
       });
-    });
+    }
+  };
 
-    socket.on('roomMessage', (data) => {
-      addLog(`🏠 [${userInfo.name}] Room message in ${data.roomId} from ${data.sender.name}: ${data.message}`, 'message', userId);
-      
-      // Add to message history
-      addMessage({
-        type: 'room',
-        sender: data.sender,
-        roomId: data.roomId,
-        message: data.message,
-        direction: data.sender.name === userInfo.name ? 'sent' : 'received'
-      });
-    });
+  // Handle typing indicator
+  const handleTyping = (text, isPrivate = false) => {
+    if (isPrivate) {
+      setPrivateMessageInput(text);
+    } else {
+      setMessageInput(text);
+    }
 
-    socket.on('broadcast', (data) => {
-      addLog(`📢 [${userInfo.name}] Broadcast from ${data.sender.name}: ${data.message}`, 'message', userId);
-      
-      // Add to message history
-      addMessage({
-        type: 'broadcast',
-        sender: data.sender,
-        message: data.message,
-        direction: 'received'
-      });
-    });
+    if (socketRef.current && isConnected) {
+      if (text.length > 0 && !isTyping) {
+        setIsTyping(true);
+        socketRef.current.emit('typing', {
+          roomId: messagingMode === 'room' ? currentRoom : null,
+          isTyping: true
+        });
+      }
 
-    // Room events
-    socket.on('roomJoined', (data) => {
-      addLog(`🏠 [${userInfo.name}] Joined room: ${data.roomId} (${data.users?.length || 0} users)`, 'success', userId);
-    });
+      // Clear previous timeout
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
 
-    socket.on('userJoinedRoom', (data) => {
-      addLog(`👥 [${userInfo.name}] Saw ${data.user.name} join room ${data.roomId}`, 'info', userId);
-    });
-
-    socket.on('userLeftRoom', (data) => {
-      addLog(`👤 [${userInfo.name}] Saw ${data.user.name} leave room ${data.roomId}`, 'info', userId);
-    });
-
-    socket.on('roomUsers', (data) => {
-      addLog(`👥 [${userInfo.name}] Room ${data.roomId} has ${data.users?.length || 0} users`, 'info', userId);
-    });
-
-    // Status events
-    socket.on('userOnline', (data) => {
-      addLog(`🟢 [${userInfo.name}] Saw ${data.user.name} come online`, 'info', userId);
-    });
-
-    socket.on('userOffline', (data) => {
-      addLog(`🔴 [${userInfo.name}] Saw ${data.user.name} go offline`, 'info', userId);
-    });
-
-    socket.on('userStatusUpdate', (data) => {
-      addLog(`📊 [${userInfo.name}] ${data.user.name} status: ${data.status}`, 'info', userId);
-    });
-
-    socket.on('userTyping', (data) => {
-      addLog(`⌨️ [${userInfo.name}] ${data.user.name} is ${data.isTyping ? 'typing' : 'not typing'}`, 'info', userId);
-    });
-
-    // Other events
-    socket.on('connectedUsers', (data) => {
-      addLog(`👥 [${userInfo.name}] Sees ${data.users?.length || 0} connected users`, 'info', userId);
-    });
-
-    socket.on('messageDelivered', (data) => {
-      addLog(`✅ [${userInfo.name}] Message delivered: ${data.messageId}`, 'success', userId);
-    });
-
-    socket.on('notification', (data) => {
-      addLog(`🔔 [${userInfo.name}] Notification from ${data.sender.name}: ${data.title}`, 'notification', userId);
-    });
-
-    socket.on('error', (data) => {
-      addLog(`❌ [${userInfo.name}] Socket error: ${data.message}`, 'error', userId);
-    });
+      // Set new timeout to stop typing indicator
+      typingTimeoutRef.current = setTimeout(() => {
+        if (isTyping) {
+          setIsTyping(false);
+          socketRef.current.emit('typing', {
+            roomId: messagingMode === 'room' ? currentRoom : null,
+            isTyping: false
+          });
+        }
+      }, 1000);
+    }
   };
 
   // Send room message
   const sendRoomMessage = () => {
-    if (!messageInput.trim() || !selectedSender) return;
-
-    const socket = userSocketsRef.current[selectedSender.id];
-    if (!socket) {
-      Alert.alert('Error', 'Selected user is not connected');
+    if (!messageInput.trim() || !socketRef.current || !isConnected) {
+      console.log('❌ Cannot send room message:', {
+        hasMessage: !!messageInput.trim(),
+        hasSocket: !!socketRef.current,
+        isConnected
+      });
+      
+      Alert.alert('Cannot Send Message', 'Please check your connection and try again.');
       return;
     }
 
-    socket.emit('roomMessage', {
-      roomId: currentRoom,
-      message: messageInput.trim()
-    });
+    console.log('📤 Sending room message to:', currentRoom, 'Message:', messageInput.trim());
+    
+    try {
+      socketRef.current.emit('roomMessage', {
+        roomId: currentRoom,
+        message: messageInput.trim()
+      });
 
-    // Add to message history as sent
-    addMessage({
-      type: 'room',
-      sender: selectedSender.userInfo,
-      roomId: currentRoom,
-      message: messageInput.trim(),
-      direction: 'sent'
-    });
-
-    setMessageInput('');
+      setMessageInput('');
+      
+      // Stop typing indicator
+      if (isTyping) {
+        setIsTyping(false);
+        socketRef.current.emit('typing', {
+          roomId: currentRoom,
+          isTyping: false
+        });
+      }
+      
+      console.log('✅ Room message sent');
+    } catch (error) {
+      console.error('❌ Error sending room message:', error);
+      Alert.alert('Send Error', 'Failed to send message');
+    }
   };
 
   // Send private message
   const sendPrivateMessage = () => {
-    if (!privateMessageInput.trim() || !selectedSender || !selectedReceiver) return;
-
-    const socket = userSocketsRef.current[selectedSender.id];
-    if (!socket) {
-      Alert.alert('Error', 'Sender is not connected');
-      return;
-    }
-
-    if (!selectedReceiver.socketId) {
-      Alert.alert('Error', 'Receiver is not connected');
-      return;
-    }
-
-    socket.emit('privateMessage', {
-      recipientId: selectedReceiver.socketId,
-      message: privateMessageInput.trim()
-    });
-
-    // Add to message history as sent
-    addMessage({
-      type: 'private',
-      sender: selectedSender.userInfo,
-      receiver: selectedReceiver.userInfo,
-      message: privateMessageInput.trim(),
-      direction: 'sent'
-    });
-
-    setPrivateMessageInput('');
-  };
-
-  // Create multiple users
-  const createUsers = async () => {
-    const count = parseInt(newUserCount) || 2;
-    if (count > 10) {
-      Alert.alert('Error', 'Maximum 10 users allowed');
-      return;
-    }
-
-    setShowUserModal(false);
-    addLog(`🚀 Creating ${count} test users...`, 'info');
-
-    const newUsers = [];
-    
-    for (let i = 0; i < count; i++) {
-      const userTemplate = testUsers[i % testUsers.length];
-      const userInfo = {
-        ...userTemplate,
-        name: `${userTemplate.name} ${i + 1}`,
-        email: `test${i + 1}@example.com`,
-      };
-      
-      const userId = userInfo.email;
-      
-      newUsers.push({
-        id: userId,
-        name: userInfo.name,
-        email: userInfo.email,
-        isConnected: false,
-        socketId: null,
-        userInfo
+    if (!privateMessageInput.trim() || !selectedReceiver || !socketRef.current || !isConnected) {
+      console.log('❌ Cannot send private message:', {
+        hasMessage: !!privateMessageInput.trim(),
+        hasReceiver: !!selectedReceiver,
+        hasSocket: !!socketRef.current,
+        isConnected
       });
-    }
-
-    setUsers(newUsers);
-    
-    // Set first user as default sender
-    if (newUsers.length > 0) {
-      setSelectedSender(newUsers[0]);
-    }
-    
-    // Authenticate and connect each user
-    for (const user of newUsers) {
-      const token = await authenticateUser(user.userInfo);
-      if (token) {
-        // Small delay between connections
-        await new Promise(resolve => setTimeout(resolve, 500));
-        connectUser(user.userInfo, token);
-      }
-    }
-  };
-
-  // Disconnect all users
-  const disconnectAllUsers = () => {
-    Object.values(userSocketsRef.current).forEach(socket => {
-      if (socket) {
-        socket.disconnect();
-      }
-    });
-    
-    userSocketsRef.current = {};
-    setUsers([]);
-    setSelectedSender(null);
-    setSelectedReceiver(null);
-    addLog('🔌 All users disconnected', 'info');
-  };
-
-  // Sleep function
-  const sleep = (ms) => {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  };
-
-  // Run comprehensive multi-user tests
-  const runMultiUserTests = async () => {
-    if (users.length === 0) {
-      Alert.alert('Error', 'No users connected');
+      
+      Alert.alert('Cannot Send Message', 'Please select a recipient and check your connection.');
       return;
     }
 
-    setIsRunning(true);
-    addLog('🧪 Starting multi-user Socket.IO tests...', 'info');
-
+    console.log('📤 Sending private message to:', selectedReceiver.userId, 'Message:', privateMessageInput.trim());
+    
     try {
-      const connectedUsers = users.filter(user => user.isConnected);
-      const roomId = 'multi-user-test-room';
-
-      // Test 1: All users join the same room
-      addLog('Test 1: All users joining the same room...', 'test');
-      connectedUsers.forEach((user, index) => {
-        const socket = userSocketsRef.current[user.id];
-        if (socket) {
-          setTimeout(() => {
-            socket.emit('joinRoom', {
-              roomId: roomId,
-              metadata: { name: 'Multi-User Test Room', description: 'Testing with multiple users' }
-            });
-          }, index * 200); // Stagger joins
-        }
+      socketRef.current.emit('privateMessage', {
+        recipientId: selectedReceiver.userId,
+        message: privateMessageInput.trim()
       });
-      
-      await sleep(2000);
 
-      // Test 2: Users send messages to the room
-      addLog('Test 2: Users sending room messages...', 'test');
-      connectedUsers.forEach((user, index) => {
-        const socket = userSocketsRef.current[user.id];
-        if (socket) {
-          setTimeout(() => {
-            socket.emit('roomMessage', {
-              roomId: roomId,
-              message: `Hello from ${user.name}! Message #${index + 1}`
-            });
-          }, index * 300);
-        }
+      // Add to local message history
+      addMessage({
+        type: 'private',
+        sender: currentUser,
+        receiver: selectedReceiver,
+        message: privateMessageInput.trim(),
+        direction: 'sent'
       });
-      
-      await sleep(3000);
 
-      // Test 3: Users update their status
-      addLog('Test 3: Users updating status...', 'test');
-      const statuses = ['online', 'busy', 'away', 'dnd'];
-      connectedUsers.forEach((user, index) => {
-        const socket = userSocketsRef.current[user.id];
-        if (socket) {
-          setTimeout(() => {
-            socket.emit('statusUpdate', {
-              status: statuses[index % statuses.length]
-            });
-          }, index * 200);
-        }
-      });
-      
-      await sleep(2000);
-
-      // Test 4: Typing indicators
-      addLog('Test 4: Testing typing indicators...', 'test');
-      connectedUsers.forEach((user, index) => {
-        const socket = userSocketsRef.current[user.id];
-        if (socket) {
-          setTimeout(() => {
-            socket.emit('typing', {
-              roomId: roomId,
-              isTyping: true
-            });
-            
-            // Stop typing after 1 second
-            setTimeout(() => {
-              socket.emit('typing', {
-                roomId: roomId,
-                isTyping: false
-              });
-            }, 1000);
-          }, index * 500);
-        }
-      });
-      
-      await sleep(4000);
-
-      // Test 5: Private messages between users
-      addLog('Test 5: Sending private messages...', 'test');
-      if (connectedUsers.length >= 2) {
-        const sender = connectedUsers[0];
-        const receiver = connectedUsers[1];
-        const senderSocket = userSocketsRef.current[sender.id];
-        
-        if (senderSocket && receiver.socketId) {
-          senderSocket.emit('privateMessage', {
-            recipientId: receiver.socketId,
-            message: `Private message from ${sender.name} to ${receiver.name}`
-          });
-        }
-      }
-      
-      await sleep(1000);
-
-      // Test 6: Broadcast messages
-      addLog('Test 6: Broadcasting messages...', 'test');
-      connectedUsers.forEach((user, index) => {
-        const socket = userSocketsRef.current[user.id];
-        if (socket) {
-          setTimeout(() => {
-            socket.emit('broadcast', {
-              message: `Broadcast from ${user.name}: Message to everyone!`
-            });
-          }, index * 400);
-        }
-      });
-      
-      await sleep(3000);
-
-      // Test 7: Get room users
-      addLog('Test 7: Getting room users...', 'test');
-      if (connectedUsers.length > 0) {
-        const socket = userSocketsRef.current[connectedUsers[0].id];
-        if (socket) {
-          socket.emit('getRoomUsers', {
-            roomId: roomId
-          });
-        }
-      }
-      
-      await sleep(1000);
-
-      // Test 8: Users leave room one by one
-      addLog('Test 8: Users leaving room...', 'test');
-      connectedUsers.forEach((user, index) => {
-        const socket = userSocketsRef.current[user.id];
-        if (socket) {
-          setTimeout(() => {
-            socket.emit('leaveRoom', {
-              roomId: roomId
-            });
-          }, index * 500);
-        }
-      });
-      
-      await sleep(3000);
-
-      addLog('✅ All multi-user tests completed!', 'success');
-
+      setPrivateMessageInput('');
+      console.log('✅ Private message sent');
     } catch (error) {
-      addLog(`❌ Test error: ${error.message}`, 'error');
-    } finally {
-      setIsRunning(false);
+      console.error('❌ Error sending private message:', error);
+      Alert.alert('Send Error', 'Failed to send private message');
     }
   };
 
-  // Test private messaging between specific users
-  const testPrivateMessaging = async () => {
-    const connectedUsers = users.filter(user => user.isConnected);
-    if (connectedUsers.length < 2) {
-      Alert.alert('Error', 'Need at least 2 connected users for private messaging test');
-      return;
-    }
-
-    addLog('💬 Testing private messaging between all users...', 'test');
-
-    // Each user sends a private message to every other user
-    connectedUsers.forEach((sender, senderIndex) => {
-      connectedUsers.forEach((receiver, receiverIndex) => {
-        if (senderIndex !== receiverIndex) {
-          const senderSocket = userSocketsRef.current[sender.id];
-          if (senderSocket && receiver.socketId) {
-            setTimeout(() => {
-              senderSocket.emit('privateMessage', {
-                recipientId: receiver.socketId,
-                message: `Private message from ${sender.name} to ${receiver.name}`
-              });
-            }, (senderIndex * connectedUsers.length + receiverIndex) * 200);
-          }
-        }
+  // Join a new room
+  const joinRoom = (roomId) => {
+    if (socketRef.current && isConnected) {
+      socketRef.current.emit('joinRoom', {
+        roomId,
+        metadata: { name: roomId, description: `Chat room: ${roomId}` }
       });
-    });
+      setCurrentRoom(roomId);
+      setShowRoomModal(false);
+      setNewRoomName('');
+    }
   };
 
-  // Cleanup on unmount
+  // Disconnect socket
+  const disconnectSocket = () => {
+    if (socketRef.current) {
+      console.log('🔌 Disconnecting socket...');
+      socketRef.current.disconnect();
+      socketRef.current = null;
+      setIsConnected(false);
+      setConnectedUsers([]);
+      setCurrentUser(null);
+    }
+  };
+
+  // Initialize connection on mount
   useEffect(() => {
+    console.log('🚀 Component mounted, initializing connection...');
+    connectToSocket();
+
     return () => {
-      Object.values(userSocketsRef.current).forEach(socket => {
-        if (socket) {
-          socket.disconnect();
-        }
-      });
+      console.log('🧹 Component unmounting, cleaning up...');
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+      disconnectSocket();
     };
   }, []);
 
-  // Get log style based on type
-  const getLogStyle = (type) => {
-    switch (type) {
-      case 'success': return styles.logSuccess;
-      case 'error': return styles.logError;
-      case 'warning': return styles.logWarning;
-      case 'message': return styles.logMessage;
-      case 'notification': return styles.logNotification;
-      case 'test': return styles.logTest;
-      default: return styles.logInfo;
+  // Filter messages based on current mode
+  const filteredMessages = messages.filter(msg => {
+    if (messagingMode === 'room') {
+      return msg.type === 'room' || msg.type === 'system';
+    } else {
+      return msg.type === 'private';
     }
+  });
+
+  // Render message item
+  const renderMessage = ({ item }) => {
+    const isOwnMessage = item.direction === 'sent' || 
+      (item.sender && currentUser && item.sender.email === currentUser.email);
+
+    return (
+      <View style={[
+        styles.messageContainer,
+        isOwnMessage ? styles.ownMessage : styles.otherMessage
+      ]}>
+        {item.type === 'system' ? (
+          <View style={styles.systemMessage}>
+            <Text style={styles.systemText}>{item.message}</Text>
+            <Text style={styles.timestamp}>{item.timestamp}</Text>
+          </View>
+        ) : (
+          <>
+            {!isOwnMessage && item.sender && (
+              <Text style={styles.senderName}>{item.sender.name}</Text>
+            )}
+            <Text style={[
+              styles.messageText,
+              isOwnMessage ? styles.ownMessageText : styles.otherMessageText
+            ]}>
+              {item.message}
+            </Text>
+            <Text style={[
+              styles.timestamp,
+              isOwnMessage ? styles.ownTimestamp : styles.otherTimestamp
+            ]}>
+              {item.timestamp}
+            </Text>
+          </>
+        )}
+      </View>
+    );
   };
 
-  // Filter logs by selected user
-  const filteredLogs = selectedUserId 
-    ? logs.filter(log => !log.userId || log.userId === selectedUserId)
-    : logs;
-
-  // Get connected users for dropdowns
-  const connectedUsers = users.filter(user => user.isConnected);
+  // Render user item for selection
+  const renderUserItem = ({ item }) => (
+    <TouchableOpacity
+      style={[
+        styles.userItem,
+        selectedReceiver?.userId === item.userId && styles.selectedUser
+      ]}
+      onPress={() => {
+        setSelectedReceiver(item);
+        setShowUserModal(false);
+      }}
+    >
+      <View style={styles.userInfo}>
+        <Text style={styles.userName}>{item.name}</Text>
+        <Text style={styles.userEmail}>{item.email}</Text>
+      </View>
+      <View style={[styles.statusIndicator, { backgroundColor: '#4CAF50' }]} />
+    </TouchableOpacity>
+  );
 
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" />
       
+      {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>Multi-User Socket.IO Test</Text>
-        <Text style={styles.serverUrl}>{SERVER_URL}</Text>
+        <Text style={styles.title}>💬 Messaging</Text>
+        <View style={styles.connectionStatus}>
+          <Text style={[styles.statusText, { color: isConnected ? '#4CAF50' : '#f44336' }]}>
+            {isConnecting ? '🟡 Connecting...' : isConnected ? '🟢 Connected' : '🔴 Disconnected'}
+          </Text>
+        </View>
       </View>
 
-      {/* User Stats */}
-      <View style={styles.statsContainer}>
-        <Text style={styles.statsText}>
-          👥 {users.length} Users | 🟢 {users.filter(u => u.isConnected).length} Connected
-        </Text>
-      </View>
-
-      {/* User List */}
-      <ScrollView horizontal style={styles.userList} showsHorizontalScrollIndicator={false}>
+      {/* Mode Toggle */}
+      <View style={styles.modeToggle}>
         <TouchableOpacity
-          style={[styles.userChip, !selectedUserId && styles.userChipSelected]}
-          onPress={() => setSelectedUserId(null)}
+          style={[styles.modeButton, messagingMode === 'room' && styles.activeModeButton]}
+          onPress={() => setMessagingMode('room')}
         >
-          <Text style={styles.userChipText}>All</Text>
-        </TouchableOpacity>
-        {users.map((user) => (
-          <TouchableOpacity
-            key={user.id}
-            style={[
-              styles.userChip,
-              user.isConnected ? styles.userChipConnected : styles.userChipDisconnected,
-              selectedUserId === user.id && styles.userChipSelected
-            ]}
-            onPress={() => setSelectedUserId(selectedUserId === user.id ? null : user.id)}
-          >
-            <Text style={styles.userChipText}>
-              {user.isConnected ? '🟢' : '🔴'} {user.name.split(' ')[0]}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
-
-      {/* Controls */}
-      <View style={styles.controls}>
-        <TouchableOpacity
-          style={[styles.button, styles.buttonCreate]}
-          onPress={() => setShowUserModal(true)}
-        >
-          <Text style={styles.buttonText}>Create Users</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.button, styles.buttonMessaging]}
-          onPress={() => setShowMessagingModal(true)}
-          disabled={connectedUsers.length === 0}
-        >
-          <Text style={styles.buttonText}>💬 Messaging</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.button, styles.buttonTest, (users.filter(u => u.isConnected).length === 0 || isRunning) && styles.buttonDisabled]}
-          onPress={runMultiUserTests}
-          disabled={users.filter(u => u.isConnected).length === 0 || isRunning}
-        >
-          <Text style={styles.buttonText}>
-            {isRunning ? 'Testing...' : 'Run Tests'}
+          <Text style={[styles.modeButtonText, messagingMode === 'room' && styles.activeModeButtonText]}>
+            🏠 Rooms
           </Text>
         </TouchableOpacity>
-
         <TouchableOpacity
-          style={[styles.button, styles.buttonPrivate]}
-          onPress={testPrivateMessaging}
-          disabled={users.filter(u => u.isConnected).length < 2}
+          style={[styles.modeButton, messagingMode === 'private' && styles.activeModeButton]}
+          onPress={() => setMessagingMode('private')}
         >
-          <Text style={styles.buttonText}>Private Msgs</Text>
+          <Text style={[styles.modeButtonText, messagingMode === 'private' && styles.activeModeButtonText]}>
+            📧 Private
+          </Text>
         </TouchableOpacity>
       </View>
 
-      <View style={styles.controls}>
-        <TouchableOpacity
-          style={[styles.button, styles.buttonDisconnect]}
-          onPress={disconnectAllUsers}
-          disabled={users.length === 0}
-        >
-          <Text style={styles.buttonText}>Disconnect All</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.button, styles.buttonClear]}
-          onPress={clearLogs}
-        >
-          <Text style={styles.buttonText}>Clear Logs</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Logs */}
-      <ScrollView
-        ref={scrollViewRef}
-        style={styles.logContainer}
-        contentContainerStyle={styles.logContent}
-      >
-        {filteredLogs.map((log) => (
-          <View key={log.id} style={styles.logEntry}>
-            <Text style={styles.timestamp}>{log.timestamp}</Text>
-            <Text style={[styles.logMessage, getLogStyle(log.type)]}>
-              {log.message}
+      {/* Current Context Display */}
+      <View style={styles.contextBar}>
+        {messagingMode === 'room' ? (
+          <TouchableOpacity 
+            style={styles.contextButton}
+            onPress={() => setShowRoomModal(true)}
+          >
+            <Text style={styles.contextText}>Room: {currentRoom}</Text>
+            <Text style={styles.changeText}>Tap to change</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity 
+            style={styles.contextButton}
+            onPress={() => setShowUserModal(true)}
+          >
+            <Text style={styles.contextText}>
+              To: {selectedReceiver ? selectedReceiver.name : 'Select user'}
             </Text>
-          </View>
-        ))}
-      </ScrollView>
+            <Text style={styles.changeText}>Tap to change</Text>
+          </TouchableOpacity>
+        )}
+      </View>
 
-      {/* Create Users Modal */}
+      {/* Messages */}
+      <FlatList
+        ref={messageScrollViewRef}
+        data={filteredMessages}
+        renderItem={renderMessage}
+        keyExtractor={(item) => item.id.toString()}
+        style={styles.messagesContainer}
+        contentContainerStyle={styles.messagesContent}
+        showsVerticalScrollIndicator={false}
+        onContentSizeChange={() => {
+          messageScrollViewRef.current?.scrollToEnd({ animated: true });
+        }}
+      />
+
+      {/* Typing Indicator */}
+      {typingUsers.length > 0 && (
+        <View style={styles.typingContainer}>
+          <Text style={styles.typingText}>
+            {typingUsers.map(u => u.name).join(', ')} {typingUsers.length === 1 ? 'is' : 'are'} typing...
+          </Text>
+        </View>
+      )}
+
+      {/* Input Area */}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.inputContainer}
+      >
+        <View style={styles.inputRow}>
+          <TextInput
+            style={styles.textInput}
+            value={messagingMode === 'room' ? messageInput : privateMessageInput}
+            onChangeText={(text) => handleTyping(text, messagingMode === 'private')}
+            placeholder={messagingMode === 'room' ? 'Type a message...' : 'Type a private message...'}
+            multiline
+            maxLength={500}
+          />
+          <TouchableOpacity
+            style={[
+              styles.sendButton,
+              (!isConnected || (messagingMode === 'room' ? !messageInput.trim() : !privateMessageInput.trim() || !selectedReceiver)) && styles.disabledButton
+            ]}
+            onPress={messagingMode === 'room' ? sendRoomMessage : sendPrivateMessage}
+            disabled={!isConnected || (messagingMode === 'room' ? !messageInput.trim() : !privateMessageInput.trim() || !selectedReceiver)}
+          >
+            <Text style={styles.sendButtonText}>Send</Text>
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+
+      {/* Action Buttons */}
+      <View style={styles.actionButtons}>
+        <TouchableOpacity style={styles.actionButton} onPress={clearMessages}>
+          <Text style={styles.actionButtonText}>🗑️ Clear</Text>
+        </TouchableOpacity>
+        <TouchableOpacity 
+          style={[styles.actionButton, !isConnected && styles.disabledButton]} 
+          onPress={connectToSocket}
+          disabled={isConnected || isConnecting}
+        >
+          <Text style={styles.actionButtonText}>🔄 Reconnect</Text>
+        </TouchableOpacity>
+        <TouchableOpacity 
+          style={[styles.actionButton, !isConnected && styles.disabledButton]} 
+          onPress={disconnectSocket}
+          disabled={!isConnected}
+        >
+          <Text style={styles.actionButtonText}>🔌 Disconnect</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* User Selection Modal */}
       <Modal
         visible={showUserModal}
-        transparent={true}
         animationType="slide"
+        transparent
         onRequestClose={() => setShowUserModal(false)}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Create Test Users</Text>
-            
-            <Text style={styles.modalLabel}>Number of users (2-10):</Text>
-            <TextInput
-              style={styles.modalInput}
-              value={newUserCount}
-              onChangeText={setNewUserCount}
-              keyboardType="numeric"
-              placeholder="2"
-            />
-            
-            <View style={styles.modalButtons}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select User</Text>
               <TouchableOpacity
-                style={[styles.button, styles.buttonCancel]}
+                style={styles.closeButton}
                 onPress={() => setShowUserModal(false)}
               >
-                <Text style={styles.buttonText}>Cancel</Text>
+                <Text style={styles.closeButtonText}>✕</Text>
               </TouchableOpacity>
-              
+            </View>
+            <FlatList
+              data={connectedUsers.filter(user => user.userId !== currentUser?.id)}
+              renderItem={renderUserItem}
+              keyExtractor={(item) => item.userId}
+              style={styles.userList}
+              showsVerticalScrollIndicator={false}
+            />
+          </View>
+        </View>
+      </Modal>
+
+      {/* Room Selection Modal */}
+      <Modal
+        visible={showRoomModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowRoomModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Join Room</Text>
               <TouchableOpacity
-                style={[styles.button, styles.buttonCreate]}
-                onPress={createUsers}
+                style={styles.closeButton}
+                onPress={() => setShowRoomModal(false)}
               >
-                <Text style={styles.buttonText}>Create</Text>
+                <Text style={styles.closeButtonText}>✕</Text>
               </TouchableOpacity>
+            </View>
+            <View style={styles.roomInputContainer}>
+              <TextInput
+                style={styles.roomInput}
+                value={newRoomName}
+                onChangeText={setNewRoomName}
+                placeholder="Enter room name..."
+                autoCapitalize="none"
+              />
+              <TouchableOpacity
+                style={[styles.joinButton, !newRoomName.trim() && styles.disabledButton]}
+                onPress={() => newRoomName.trim() && joinRoom(newRoomName.trim())}
+                disabled={!newRoomName.trim()}
+              >
+                <Text style={styles.joinButtonText}>Join</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.predefinedRooms}>
+              <Text style={styles.predefinedTitle}>Quick Join:</Text>
+              {['general', 'random', 'help', 'announcements'].map(room => (
+                <TouchableOpacity
+                  key={room}
+                  style={[styles.roomOption, currentRoom === room && styles.selectedRoom]}
+                  onPress={() => joinRoom(room)}
+                >
+                  <Text style={styles.roomOptionText}>#{room}</Text>
+                </TouchableOpacity>
+              ))}
             </View>
           </View>
         </View>
       </Modal>
 
-      {/* Messaging Modal */}
-      <Modal
-        visible={showMessagingModal}
-        animationType="slide"
-        onRequestClose={() => setShowMessagingModal(false)}
-      >
-        <SafeAreaView style={styles.messagingContainer}>
-          <View style={styles.messagingHeader}>
-            <TouchableOpacity
-              style={styles.closeButton}
-              onPress={() => setShowMessagingModal(false)}
-            >
-              <Text style={styles.closeButtonText}>✕</Text>
-            </TouchableOpacity>
-            <Text style={styles.messagingTitle}>💬 Live Messaging Test</Text>
-            <TouchableOpacity
-              style={styles.clearMessagesButton}
-              onPress={clearMessages}
-            >
-              <Text style={styles.clearMessagesText}>Clear</Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Messaging Mode Toggle */}
-          <View style={styles.modeToggle}>
-            <TouchableOpacity
-              style={[styles.modeButton, messagingMode === 'room' && styles.modeButtonActive]}
-              onPress={() => setMessagingMode('room')}
-            >
-              <Text style={styles.modeButtonText}>Room Chat</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.modeButton, messagingMode === 'private' && styles.modeButtonActive]}
-              onPress={() => setMessagingMode('private')}
-            >
-              <Text style={styles.modeButtonText}>Private Chat</Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Message History */}
-          <ScrollView
-            ref={messageScrollViewRef}
-            style={styles.messageHistory}
-            contentContainerStyle={styles.messageHistoryContent}
-          >
-            {messages
-              .filter(msg => messagingMode === 'room' ? msg.type === 'room' : msg.type === 'private')
-              .map((message) => (
-              <View key={message.id} style={[
-                styles.messageItem,
-                message.direction === 'sent' ? styles.messageItemSent : styles.messageItemReceived
-              ]}>
-                <Text style={styles.messageSender}>
-                  {message.type === 'private' 
-                    ? `${message.sender.name} → ${message.receiver?.name || 'Unknown'}`
-                    : `${message.sender.name} (${message.roomId})`
-                  }
-                </Text>
-                <Text style={styles.messageText}>{message.message}</Text>
-                <Text style={styles.messageTime}>{message.timestamp}</Text>
-              </View>
-            ))}
-          </ScrollView>
-
-          {/* Message Input */}
-          <KeyboardAvoidingView 
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            style={styles.messageInputContainer}
-          >
-            {messagingMode === 'room' ? (
-              <View style={styles.roomMessageInput}>
-                <View style={styles.senderSelector}>
-                  <Text style={styles.selectorLabel}>From:</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                    {connectedUsers.map((user) => (
-                      <TouchableOpacity
-                        key={user.id}
-                        style={[
-                          styles.selectorChip,
-                          selectedSender?.id === user.id && styles.selectorChipSelected
-                        ]}
-                        onPress={() => setSelectedSender(user)}
-                      >
-                        <Text style={styles.selectorChipText}>{user.name.split(' ')[0]}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                </View>
-                
-                <View style={styles.inputRow}>
-                  <TextInput
-                    style={styles.messageTextInput}
-                    value={messageInput}
-                    onChangeText={setMessageInput}
-                    placeholder={`Send message to room: ${currentRoom}`}
-                    multiline
-                  />
-                  <TouchableOpacity
-                    style={[styles.sendButton, (!messageInput.trim() || !selectedSender) && styles.sendButtonDisabled]}
-                    onPress={sendRoomMessage}
-                    disabled={!messageInput.trim() || !selectedSender}
-                  >
-                    <Text style={styles.sendButtonText}>Send</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ) : (
-              <View style={styles.privateMessageInput}>
-                <View style={styles.privateSelectorRow}>
-                  <View style={styles.privateSelectorHalf}>
-                    <Text style={styles.selectorLabel}>From:</Text>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                      {connectedUsers.map((user) => (
-                        <TouchableOpacity
-                          key={user.id}
-                          style={[
-                            styles.selectorChip,
-                            selectedSender?.id === user.id && styles.selectorChipSelected
-                          ]}
-                          onPress={() => setSelectedSender(user)}
-                        >
-                          <Text style={styles.selectorChipText}>{user.name.split(' ')[0]}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
-                  </View>
-                  
-                  <View style={styles.privateSelectorHalf}>
-                    <Text style={styles.selectorLabel}>To:</Text>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                      {connectedUsers.filter(user => user.id !== selectedSender?.id).map((user) => (
-                        <TouchableOpacity
-                          key={user.id}
-                          style={[
-                            styles.selectorChip,
-                            selectedReceiver?.id === user.id && styles.selectorChipSelected
-                          ]}
-                          onPress={() => setSelectedReceiver(user)}
-                        >
-                          <Text style={styles.selectorChipText}>{user.name.split(' ')[0]}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
-                  </View>
-                </View>
-                
-                <View style={styles.inputRow}>
-                  <TextInput
-                    style={styles.messageTextInput}
-                    value={privateMessageInput}
-                    onChangeText={setPrivateMessageInput}
-                    placeholder={`Send private message to ${selectedReceiver?.name || 'select user'}`}
-                    multiline
-                  />
-                  <TouchableOpacity
-                    style={[styles.sendButton, (!privateMessageInput.trim() || !selectedSender || !selectedReceiver) && styles.sendButtonDisabled]}
-                    onPress={sendPrivateMessage}
-                    disabled={!privateMessageInput.trim() || !selectedSender || !selectedReceiver}
-                  >
-                    <Text style={styles.sendButtonText}>Send</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            )}
-          </KeyboardAvoidingView>
-        </SafeAreaView>
-      </Modal>
+      {/* Connection Error Display */}
+      {connectionError && (
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>{connectionError}</Text>
+        </View>
+      )}
     </SafeAreaView>
   );
 };
@@ -954,139 +826,212 @@ const styles = StyleSheet.create({
     backgroundColor: '#f5f5f5',
   },
   header: {
-    backgroundColor: '#2196F3',
-    padding: 16,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
   },
   title: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: 'white',
-  },
-  serverUrl: {
-    fontSize: 10,
-    color: 'rgba(255, 255, 255, 0.8)',
-    marginTop: 4,
-  },
-  statsContainer: {
-    backgroundColor: '#e3f2fd',
-    padding: 8,
-    alignItems: 'center',
-  },
-  statsText: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#1976d2',
-  },
-  userList: {
-    maxHeight: 50,
-    backgroundColor: '#fff',
-    paddingHorizontal: 8,
-  },
-  userChip: {
-    backgroundColor: '#e0e0e0',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 16,
-    marginHorizontal: 4,
-    marginVertical: 8,
-  },
-  userChipConnected: {
-    backgroundColor: '#c8e6c9',
-  },
-  userChipDisconnected: {
-    backgroundColor: '#ffcdd2',
-  },
-  userChipSelected: {
-    backgroundColor: '#2196F3',
-  },
-  userChipText: {
-    fontSize: 12,
+    fontSize: 20,
     fontWeight: 'bold',
     color: '#333',
   },
-  controls: {
+  connectionStatus: {
+    alignItems: 'flex-end',
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  modeToggle: {
     flexDirection: 'row',
-    padding: 8,
-    gap: 6,
-  },
-  button: {
-    flex: 1,
-    padding: 10,
-    borderRadius: 6,
-    alignItems: 'center',
-  },
-  buttonCreate: {
-    backgroundColor: '#4CAF50',
-  },
-  buttonMessaging: {
-    backgroundColor: '#E91E63',
-  },
-  buttonTest: {
-    backgroundColor: '#FF9800',
-  },
-  buttonPrivate: {
-    backgroundColor: '#9C27B0',
-  },
-  buttonDisconnect: {
-    backgroundColor: '#f44336',
-  },
-  buttonClear: {
-    backgroundColor: '#607D8B',
-  },
-  buttonCancel: {
-    backgroundColor: '#757575',
-  },
-  buttonDisabled: {
-    backgroundColor: '#ccc',
-  },
-  buttonText: {
-    color: 'white',
-    fontWeight: 'bold',
-    fontSize: 11,
-  },
-  logContainer: {
-    flex: 1,
-    backgroundColor: '#000',
-    marginHorizontal: 8,
-    marginBottom: 8,
+    backgroundColor: '#fff',
+    marginHorizontal: 16,
+    marginVertical: 8,
     borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
   },
-  logContent: {
-    padding: 8,
+  modeButton: {
+    flex: 1,
+    paddingVertical: 12,
+    alignItems: 'center',
+    backgroundColor: '#f9f9f9',
   },
-  logEntry: {
-    marginBottom: 6,
+  activeModeButton: {
+    backgroundColor: '#007bff',
   },
-  timestamp: {
-    color: '#888',
-    fontSize: 9,
-    marginBottom: 2,
+  modeButtonText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#666',
   },
-  logMessage: {
-    fontSize: 11,
-    fontFamily: 'monospace',
-  },
-  logInfo: {
+  activeModeButtonText: {
     color: '#fff',
   },
-  logSuccess: {
-    color: '#4CAF50',
+  contextBar: {
+    backgroundColor: '#fff',
+    marginHorizontal: 16,
+    marginBottom: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
   },
-  logError: {
-    color: '#f44336',
+  contextButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
-  logWarning: {
-    color: '#FF9800',
+  contextText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#333',
   },
-  logMessage: {
-    color: '#2196F3',
+  changeText: {
+    fontSize: 12,
+    color: '#007bff',
+    marginTop: 2,
   },
-  logNotification: {
-    color: '#9C27B0',
+  messagesContainer: {
+    flex: 1,
+    paddingHorizontal: 20,
   },
-  logTest: {
-    color: '#FFEB3B',
+  messagesContent: {
+    paddingVertical: 10,
+  },
+  messageContainer: {
+    marginVertical: 4,
+    maxWidth: '80%',
+  },
+  ownMessage: {
+    alignSelf: 'flex-end',
+  },
+  otherMessage: {
+    alignSelf: 'flex-start',
+  },
+  systemMessage: {
+    alignSelf: 'center',
+    backgroundColor: '#f0f0f0',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 15,
+    marginVertical: 2,
+    maxWidth: '90%',
+  },
+  systemText: {
+    fontSize: 12,
+    color: '#666',
+    textAlign: 'center',
+  },
+  senderName: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#666',
+    marginBottom: 2,
+    marginLeft: 4,
+  },
+  messageText: {
+    fontSize: 16,
+    lineHeight: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 18,
+  },
+  ownMessageText: {
+    backgroundColor: '#007AFF',
+    color: '#fff',
+  },
+  otherMessageText: {
+    backgroundColor: '#fff',
+    color: '#333',
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  timestamp: {
+    fontSize: 10,
+    marginTop: 2,
+    marginHorizontal: 4,
+  },
+  ownTimestamp: {
+    color: '#666',
+    textAlign: 'right',
+  },
+  otherTimestamp: {
+    color: '#999',
+    textAlign: 'left',
+  },
+  typingContainer: {
+    paddingHorizontal: 20,
+    paddingVertical: 5,
+  },
+  typingText: {
+    fontSize: 12,
+    color: '#666',
+    fontStyle: 'italic',
+  },
+  inputContainer: {
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
+  },
+  inputRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+  },
+  textInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    borderRadius: 20,
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+    fontSize: 16,
+    maxHeight: 100,
+    backgroundColor: '#f9f9f9',
+  },
+  sendButton: {
+    backgroundColor: '#007AFF',
+    borderRadius: 20,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    marginLeft: 10,
+  },
+  disabledButton: {
+    backgroundColor: '#ccc',
+    opacity: 0.6,
+  },
+  sendButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  actionButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
+  },
+  actionButton: {
+    backgroundColor: '#f0f0f0',
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 15,
+    minWidth: 80,
+    alignItems: 'center',
+  },
+  actionButtonText: {
+    fontSize: 12,
+    color: '#666',
+    fontWeight: '500',
   },
   modalOverlay: {
     flex: 1,
@@ -1095,205 +1040,154 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   modalContent: {
-    backgroundColor: 'white',
-    padding: 24,
-    borderRadius: 12,
-    width: '80%',
-    maxWidth: 300,
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 0,
+    width: width * 0.9,
+    maxHeight: height * 0.7,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
   },
   modalTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    marginBottom: 16,
-    textAlign: 'center',
-  },
-  modalLabel: {
-    fontSize: 14,
-    marginBottom: 8,
     color: '#333',
-  },
-  modalInput: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 16,
-    fontSize: 16,
-  },
-  modalButtons: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  
-  // Messaging Modal Styles
-  messagingContainer: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  messagingHeader: {
-    backgroundColor: '#E91E63',
-    padding: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
   },
   closeButton: {
-    padding: 8,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#f0f0f0',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   closeButtonText: {
-    color: 'white',
-    fontSize: 18,
+    fontSize: 16,
+    color: '#666',
     fontWeight: 'bold',
   },
-  messagingTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: 'white',
-    flex: 1,
-    textAlign: 'center',
+  userList: {
+    maxHeight: height * 0.5,
   },
-  clearMessagesButton: {
-    padding: 8,
-  },
-  clearMessagesText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
-  modeToggle: {
+  userItem: {
     flexDirection: 'row',
-    backgroundColor: '#fff',
-    margin: 8,
-    borderRadius: 8,
-    padding: 4,
-  },
-  modeButton: {
-    flex: 1,
-    padding: 12,
     alignItems: 'center',
-    borderRadius: 6,
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
   },
-  modeButtonActive: {
-    backgroundColor: '#E91E63',
-  },
-  modeButtonText: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#666',
-  },
-  messageHistory: {
-    flex: 1,
-    backgroundColor: '#fff',
-    marginHorizontal: 8,
-    borderRadius: 8,
-  },
-  messageHistoryContent: {
-    padding: 12,
-  },
-  messageItem: {
-    backgroundColor: '#f8f8f8',
-    padding: 12,
-    borderRadius: 12,
-    marginBottom: 12,
-    maxWidth: '80%',
-  },
-  messageItemSent: {
-    backgroundColor: '#E91E63',
-    alignSelf: 'flex-end',
-  },
-  messageItemReceived: {
+  selectedUser: {
     backgroundColor: '#e3f2fd',
-    alignSelf: 'flex-start',
   },
-  messageSender: {
-    fontSize: 10,
-    fontWeight: 'bold',
-    color: '#666',
-    marginBottom: 4,
-  },
-  messageText: {
-    fontSize: 14,
-    color: '#333',
-    marginBottom: 4,
-  },
-  messageTime: {
-    fontSize: 9,
-    color: '#999',
-    textAlign: 'right',
-  },
-  messageInputContainer: {
-    backgroundColor: '#fff',
-    margin: 8,
-    borderRadius: 8,
-    padding: 12,
-  },
-  roomMessageInput: {
-    
-  },
-  privateMessageInput: {
-    
-  },
-  senderSelector: {
-    marginBottom: 12,
-  },
-  privateSelectorRow: {
-    flexDirection: 'row',
-    marginBottom: 12,
-    gap: 8,
-  },
-  privateSelectorHalf: {
+  userInfo: {
     flex: 1,
   },
-  selectorLabel: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: '#666',
-    marginBottom: 6,
-  },
-  selectorChip: {
-    backgroundColor: '#e0e0e0',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
-    marginRight: 6,
-  },
-  selectorChipSelected: {
-    backgroundColor: '#E91E63',
-  },
-  selectorChipText: {
-    fontSize: 11,
-    fontWeight: 'bold',
+  userName: {
+    fontSize: 16,
+    fontWeight: '600',
     color: '#333',
   },
-  inputRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 8,
+  userEmail: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 2,
   },
-  messageTextInput: {
+  statusIndicator: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginLeft: 10,
+  },
+  roomInputContainer: {
+    flexDirection: 'row',
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+  },
+  roomInput: {
     flex: 1,
     borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 20,
-    paddingHorizontal: 16,
+    borderColor: '#e0e0e0',
+    borderRadius: 10,
+    paddingHorizontal: 15,
     paddingVertical: 10,
-    fontSize: 14,
-    maxHeight: 100,
+    fontSize: 16,
+    backgroundColor: '#f9f9f9',
   },
-  sendButton: {
-    backgroundColor: '#E91E63',
+  joinButton: {
+    backgroundColor: '#007AFF',
+    borderRadius: 10,
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+    marginLeft: 10,
+  },
+  joinButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  predefinedRooms: {
     paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 20,
+    paddingVertical: 15,
   },
-  sendButtonDisabled: {
-    backgroundColor: '#ccc',
+  predefinedTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 10,
   },
-  sendButtonText: {
-    color: 'white',
-    fontWeight: 'bold',
+  roomOption: {
+    backgroundColor: '#f9f9f9',
+    paddingHorizontal: 15,
+    paddingVertical: 12,
+    borderRadius: 10,
+    marginVertical: 3,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  selectedRoom: {
+    backgroundColor: '#e3f2fd',
+    borderColor: '#007AFF',
+  },
+  roomOptionText: {
+    fontSize: 16,
+    color: '#333',
+    fontWeight: '500',
+  },
+  errorContainer: {
+    position: 'absolute',
+    top: 100,
+    left: 20,
+    right: 20,
+    backgroundColor: '#ffebee',
+    borderRadius: 10,
+    padding: 15,
+    borderLeftWidth: 4,
+    borderLeftColor: '#f44336',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+  },
+  errorText: {
     fontSize: 14,
+    color: '#c62828',
+    fontWeight: '500',
   },
 });
-
-export default SocketIOTest;

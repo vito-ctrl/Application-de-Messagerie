@@ -19,12 +19,12 @@ export default function SimpleTabBar({ navigation }) { // Add navigation prop
       >
         <Text style={styles.tabText}>Login</Text>
       </TouchableOpacity>
-       <TouchableOpacity 
+       {/* <TouchableOpacity 
         style={styles.tab} 
         onPress={() => handleTabPress('SocketIOTest')}
       >
         <Text style={styles.tabText}>SocketTest</Text>
-      </TouchableOpacity>
+      </TouchableOpacity> */}
     </View>
   );
 }
